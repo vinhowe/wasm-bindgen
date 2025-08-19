@@ -392,6 +392,8 @@ pub struct Function {
     pub generate_jsdoc: bool,
     /// Whether this is a function with a variadict parameter
     pub variadic: bool,
+    /// Unchecked TypeScript to place before the function declaration, for overloads etc.
+    pub prelude: Option<String>,
 }
 
 /// Information about a function's return

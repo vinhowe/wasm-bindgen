@@ -243,6 +243,7 @@ fn shared_function<'a>(func: &'a ast::Function, _intern: &'a Interner) -> Functi
         generate_typescript: func.generate_typescript,
         generate_jsdoc: func.generate_jsdoc,
         variadic: func.variadic,
+        prelude: func.prelude.as_deref(),
         ret_ty_override: func.ret.as_ref().and_then(|v| v.js_type.as_deref()),
         ret_desc: func.ret.as_ref().and_then(|v| v.desc.as_deref()),
     }

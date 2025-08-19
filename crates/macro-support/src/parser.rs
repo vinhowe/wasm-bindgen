@@ -197,6 +197,7 @@ macro_rules! attrgen {
             (return_description, true, ReturnDesc(Span, String, Span)),
             (unchecked_param_type, true, ParamType(Span, String, Span)),
             (param_description, true, ParamDesc(Span, String, Span)),
+            (unchecked_prelude, true, Prelude(Span, String, Span)),
 
             // For testing purposes only.
             (assert_no_shim, false, AssertNoShim(Span)),
@@ -1164,6 +1165,7 @@ fn function_from_decl(
     // process function return data
     let ret_ty_override = opts.unchecked_return_type();
     let ret_desc = opts.return_description();
+    let prelude = opts.unchecked_prelude().map(|(desc, _)| desc.to_string());
     let ret = match output {
         syn::ReturnType::Default => None,
         syn::ReturnType::Type(_, ty) => Some(ast::FunctionReturnData {
@@ -1224,6 +1226,7 @@ fn function_from_decl(
             generate_typescript: opts.skip_typescript().is_none(),
             generate_jsdoc: opts.skip_jsdoc().is_none(),
             variadic: opts.variadic().is_some(),
+            prelude,
             ret,
             arguments: arguments
                 .into_iter()

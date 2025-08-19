@@ -84,6 +84,8 @@ pub struct AuxExport {
     pub generate_typescript: bool,
     /// Whether jsdoc comments should be generated for this export.
     pub generate_jsdoc: bool,
+    /// Unchecked TypeScript to place before the function declaration, for overloads etc.
+    pub prelude: Option<String>,
     /// Whether typescript bindings should be generated for this export.
     pub variadic: bool,
     /// Function's return overriding type

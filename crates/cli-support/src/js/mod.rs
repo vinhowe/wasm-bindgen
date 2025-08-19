@@ -2873,6 +2873,7 @@ __wbg_set_wasm(wasm);"
         let mut asyncness = false;
         let mut variadic = false;
         let mut generate_jsdoc = false;
+        let mut prelude = &None;
         let mut ret_ty_override = &None;
         let mut ret_desc = &None;
         match kind {
@@ -2881,6 +2882,7 @@ __wbg_set_wasm(wasm);"
                 asyncness = export.asyncness;
                 variadic = export.variadic;
                 generate_jsdoc = export.generate_jsdoc;
+                prelude = &export.prelude;
                 ret_ty_override = &export.fn_ret_ty_override;
                 ret_desc = &export.fn_ret_desc;
                 match &export.kind {
@@ -2927,11 +2929,14 @@ __wbg_set_wasm(wasm);"
                 asyncness,
                 variadic,
                 generate_jsdoc,
+                prelude,
                 &debug_name,
                 ret_ty_override,
                 ret_desc,
             )
             .with_context(|| "failed to generates bindings for ".to_string() + &debug_name)?;
+
+        let prelude = prelude.as_deref();
 
         self.typescript_refs.extend(ts_refs);
 
@@ -2960,6 +2965,9 @@ __wbg_set_wasm(wasm);"
                     AuxExportKind::Function(name) => {
                         if let Some(ts_sig) = ts_sig {
                             self.typescript.push_str(&ts_docs);
+                            if let Some(prelude) = prelude {
+                                self.typescript.push_str(&prelude);
+                            }
                             self.typescript.push_str("export function ");
                             self.typescript.push_str(name);
                             self.typescript.push_str(ts_sig);
@@ -2981,7 +2989,15 @@ __wbg_set_wasm(wasm);"
                         }
 
                         exported.has_constructor = true;
-                        exported.push("constructor", "", &js_docs, &code, &ts_docs, ts_sig);
+                        exported.push(
+                            "constructor",
+                            "",
+                            prelude,
+                            &js_docs,
+                            &code,
+                            &ts_docs,
+                            ts_sig,
+                        );
                     }
                     AuxExportKind::Method {
                         class,
@@ -3038,7 +3054,7 @@ __wbg_set_wasm(wasm);"
                             }
                         };
 
-                        exported.push(name, &prefix, &js_docs, &code, &ts_docs, ts);
+                        exported.push(name, &prefix, prelude, &js_docs, &code, &ts_docs, ts);
                     }
                 }
             }
@@ -4546,6 +4562,7 @@ impl ExportedClass {
         &mut self,
         function_name: &str,
         function_prefix: &str,
+        prelude: Option<&str>,
         js_docs: &str,
         js: &str,
         ts_docs: &str,

@@ -148,6 +148,7 @@ macro_rules! shared_api {
             generate_typescript: bool,
             generate_jsdoc: bool,
             variadic: bool,
+            prelude: Option<&'a str>,
             ret_ty_override: Option<&'a str>,
             ret_desc: Option<&'a str>,
         }
