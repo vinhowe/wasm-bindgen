@@ -2967,6 +2967,7 @@ __wbg_set_wasm(wasm);"
                             self.typescript.push_str(&ts_docs);
                             if let Some(prelude) = prelude {
                                 self.typescript.push_str(&prelude);
+                                self.typescript.push('\n');
                             }
                             self.typescript.push_str("export function ");
                             self.typescript.push_str(name);
@@ -4571,6 +4572,7 @@ impl ExportedClass {
         self.contents.push_str(js_docs);
         if let Some(prelude) = prelude {
             self.contents.push_str(prelude);
+            self.contents.push('\n');
         }
         self.contents.push_str(function_prefix);
         self.contents.push_str(function_name);
