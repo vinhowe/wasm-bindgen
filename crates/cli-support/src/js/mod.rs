@@ -4569,6 +4569,9 @@ impl ExportedClass {
         ts: Option<&str>,
     ) {
         self.contents.push_str(js_docs);
+        if let Some(prelude) = prelude {
+            self.contents.push_str(prelude);
+        }
         self.contents.push_str(function_prefix);
         self.contents.push_str(function_name);
         self.contents.push_str(js);
