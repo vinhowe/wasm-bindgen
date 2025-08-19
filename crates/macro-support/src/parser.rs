@@ -1237,6 +1237,7 @@ fn function_from_decl(
                     pat_type,
                     js_name: attrs.js_name,
                     js_type: attrs.js_type,
+                    js_type_optional: attrs.js_type_optional,
                     desc: attrs.desc,
                 })
                 .collect(),
@@ -1250,6 +1251,7 @@ fn function_from_decl(
 struct FnArgAttrs {
     js_name: Option<String>,
     js_type: Option<String>,
+    js_type_optional: bool,
     desc: Option<String>,
 }
 
@@ -1259,6 +1261,15 @@ fn extract_args_attrs(sig: &mut syn::Signature) -> Result<Vec<FnArgAttrs>, Diagn
     for input in sig.inputs.iter_mut() {
         if let syn::FnArg::Typed(pat_type) = input {
             let attrs = BindgenAttrs::find(&mut pat_type.attrs)?;
+            let unchecked_param_type = attrs
+                .unchecked_param_type()
+                .map_or::<Result<_, Diagnostic>, _>(Ok(None), |(ty, span)| {
+                    check_invalid_type(ty, span)?;
+                    Ok(Some(ty.to_string()))
+                })?;
+            let js_type_optional = unchecked_param_type
+                .as_ref()
+                .map_or(false, |ty| ty.contains("?"));
             let arg_attrs = FnArgAttrs {
                 js_name: attrs
                     .js_name()
@@ -1268,12 +1279,8 @@ fn extract_args_attrs(sig: &mut syn::Signature) -> Result<Vec<FnArgAttrs>, Diagn
                         }
                         Ok(Some(js_name_override.to_string()))
                     })?,
-                js_type: attrs
-                    .unchecked_param_type()
-                    .map_or::<Result<_, Diagnostic>, _>(Ok(None), |(ty, span)| {
-                        check_invalid_type(ty, span)?;
-                        Ok(Some(ty.to_string()))
-                    })?,
+                js_type: unchecked_param_type.map(|ty| ty.replace("?", "")),
+                js_type_optional,
                 desc: attrs
                     .param_description()
                     .map_or::<Result<_, Diagnostic>, _>(Ok(None), |(description, span)| {

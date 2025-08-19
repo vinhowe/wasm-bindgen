@@ -528,6 +528,7 @@ impl<'a> Context<'a> {
                     name: v.name,
                     ty_override: v.ty_override.map(String::from),
                     desc: v.desc.map(String::from),
+                    js_type_optional: v.js_type_optional,
                 })
                 .collect::<Vec<_>>(),
         );

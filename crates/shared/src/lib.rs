@@ -156,6 +156,7 @@ macro_rules! shared_api {
             name: String,
             ty_override: Option<&'a str>,
             desc: Option<&'a str>,
+            js_type_optional: bool,
         }
 
         struct Struct<'a> {

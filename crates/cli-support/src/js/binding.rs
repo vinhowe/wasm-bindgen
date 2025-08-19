@@ -169,6 +169,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                     name: format!("arg{i}"),
                     ty_override: None,
                     desc: None,
+                    js_type_optional: false,
                 },
             };
             js.args.push(arg.name.clone());
@@ -339,7 +340,10 @@ impl<'a, 'b> Builder<'a, 'b> {
         let mut ts_refs = HashSet::new();
         for (
             AuxFunctionArgumentData {
-                name, ty_override, ..
+                name,
+                ty_override,
+                js_type_optional,
+                ..
             },
             ty,
         ) in args_data.iter().zip(arg_tys).rev()
@@ -352,8 +356,12 @@ impl<'a, 'b> Builder<'a, 'b> {
             let mut arg = name.to_string();
             let mut ts = String::new();
             if let Some(v) = ty_override {
-                omittable = false;
-                arg.push_str(": ");
+                if *js_type_optional {
+                    arg.push_str("?: ");
+                } else {
+                    arg.push_str(": ");
+                    omittable = false;
+                }
                 ts.push_str(v);
             } else {
                 match ty {
@@ -448,6 +456,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                 name,
                 ty_override,
                 desc,
+                js_type_optional,
             },
             ty,
         ) in fn_arg_names.iter().zip(arg_tys).rev()
@@ -455,9 +464,13 @@ impl<'a, 'b> Builder<'a, 'b> {
             let mut arg = "@param {".to_string();
 
             if let Some(v) = ty_override {
-                omittable = false;
                 arg.push_str(v);
-                arg.push_str("} ");
+                if *js_type_optional {
+                    arg.push_str(" | null} ");
+                } else {
+                    arg.push_str("} ");
+                    omittable = false;
+                }
                 arg.push_str(name);
             } else {
                 match ty {
@@ -492,6 +505,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                 name,
                 ty_override,
                 desc,
+                ..
             }),
             Some(ty),
         ) = (variadic_arg, arg_tys.last())

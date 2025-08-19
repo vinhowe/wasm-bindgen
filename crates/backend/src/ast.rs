@@ -416,6 +416,8 @@ pub struct FunctionArgumentData {
     pub js_name: Option<String>,
     /// Specifies the JS function argument type override
     pub js_type: Option<String>,
+    /// Specifies whether the JS function argument type is optional
+    pub js_type_optional: bool,
     /// Specifies the argument description
     pub desc: Option<String>,
 }

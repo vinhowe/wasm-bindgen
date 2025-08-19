@@ -99,6 +99,8 @@ pub struct AuxFunctionArgumentData {
     pub name: String,
     /// Specifies the function argument type override
     pub ty_override: Option<String>,
+    /// Specifies whether the JS function argument type is optional
+    pub js_type_optional: bool,
     /// Specifies the argument description
     pub desc: Option<String>,
 }
