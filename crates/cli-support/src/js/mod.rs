@@ -2929,7 +2929,6 @@ __wbg_set_wasm(wasm);"
                 asyncness,
                 variadic,
                 generate_jsdoc,
-                prelude,
                 &debug_name,
                 ret_ty_override,
                 ret_desc,
@@ -4570,10 +4569,6 @@ impl ExportedClass {
         ts: Option<&str>,
     ) {
         self.contents.push_str(js_docs);
-        if let Some(prelude) = prelude {
-            self.contents.push_str(prelude);
-            self.contents.push('\n');
-        }
         self.contents.push_str(function_prefix);
         self.contents.push_str(function_name);
         self.contents.push_str(js);
@@ -4586,11 +4581,21 @@ impl ExportedClass {
                     self.typescript.push('\n');
                 }
             }
+            if let Some(prelude) = prelude {
+                for line in prelude.lines() {
+                    self.typescript.push_str("  ");
+                    self.typescript.push_str(line);
+                    self.typescript.push('\n');
+                }
+            }
             self.typescript.push_str("  ");
             self.typescript.push_str(function_prefix);
             self.typescript.push_str(function_name);
             self.typescript.push_str(ts);
             self.typescript.push_str(";\n");
+        }
+        if prelude.is_some() {
+            println!("contents: {}", self.typescript);
         }
     }
 

@@ -127,7 +127,6 @@ impl<'a, 'b> Builder<'a, 'b> {
         asyncness: bool,
         variadic: bool,
         generate_jsdoc: bool,
-        prelude: &Option<String>,
         debug_name: &str,
         ret_ty_override: &Option<String>,
         ret_desc: &Option<String>,
