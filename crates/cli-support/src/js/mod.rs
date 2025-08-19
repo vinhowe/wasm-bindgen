@@ -4594,9 +4594,6 @@ impl ExportedClass {
             self.typescript.push_str(ts);
             self.typescript.push_str(";\n");
         }
-        if prelude.is_some() {
-            println!("contents: {}", self.typescript);
-        }
     }
 
     fn push_accessor_ts(
