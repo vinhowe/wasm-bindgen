@@ -40,7 +40,7 @@ pub struct Bindgen {
     multi_value: bool,
     encode_into: EncodeInto,
     split_linked_modules: bool,
-    symbol_dispose: bool,
+    generate_reset_state: bool,
 }
 
 pub struct Output {
@@ -67,6 +67,7 @@ enum OutputMode {
     NoModules { global: String },
     Node { module: bool },
     Deno,
+    Module,
 }
 
 enum Input {
@@ -76,6 +77,7 @@ enum Input {
     None,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum EncodeInto {
     Test,
     Always,
@@ -87,7 +89,6 @@ impl Bindgen {
         let externref =
             env::var("WASM_BINDGEN_ANYREF").is_ok() || env::var("WASM_BINDGEN_EXTERNREF").is_ok();
         let multi_value = env::var("WASM_BINDGEN_MULTI_VALUE").is_ok();
-        let symbol_dispose = env::var("WASM_BINDGEN_EXPERIMENTAL_SYMBOL_DISPOSE").is_ok();
         Bindgen {
             input: Input::None,
             out_name: None,
@@ -108,7 +109,7 @@ impl Bindgen {
             encode_into: EncodeInto::Test,
             omit_default_module_path: true,
             split_linked_modules: false,
-            symbol_dispose,
+            generate_reset_state: false,
         }
     }
 
@@ -145,10 +146,7 @@ impl Bindgen {
     fn switch_mode(&mut self, mode: OutputMode, flag: &str) -> Result<(), Error> {
         match self.mode {
             OutputMode::Bundler { .. } => self.mode = mode,
-            _ => bail!(
-                "cannot specify `{}` with another output mode already specified",
-                flag
-            ),
+            _ => bail!("cannot specify `{flag}` with another output mode already specified"),
         }
         Ok(())
     }
@@ -215,6 +213,13 @@ impl Bindgen {
         if deno {
             self.switch_mode(OutputMode::Deno, "--target deno")?;
             self.encode_into(EncodeInto::Always);
+        }
+        Ok(self)
+    }
+
+    pub fn module(&mut self, source_phase: bool) -> Result<&mut Bindgen, Error> {
+        if source_phase {
+            self.switch_mode(OutputMode::Module, "--target module")?;
         }
         Ok(self)
     }
@@ -287,6 +292,11 @@ impl Bindgen {
         self
     }
 
+    pub fn reset_state_function(&mut self, generate_reset_state: bool) -> &mut Bindgen {
+        self.generate_reset_state = generate_reset_state;
+        self
+    }
+
     pub fn generate<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Error> {
         self.generate_output()?.emit(path.as_ref())
     }
@@ -336,6 +346,11 @@ impl Bindgen {
             && module.exports.iter().any(|export| export.name == "default")
         {
             bail!("exported symbol \"default\" not allowed for --target web")
+        }
+
+        // Check that reset_state is only used with --target module
+        if self.generate_reset_state && !matches!(self.mode, OutputMode::Module) {
+            bail!("--experimental-reset-state-function is only supported for --target module")
         }
 
         let thread_count = transforms::threads::run(&mut module)
@@ -688,8 +703,22 @@ impl Output {
 
         let js_path = out_dir.join(&self.stem).with_extension(extension);
 
-        if gen.mode.esm_integration() {
-            let js_name = format!("{}_bg.{}", self.stem, extension);
+        if matches!(&gen.mode, OutputMode::Module) {
+            let wasm_name = format!("{}_bg", self.stem);
+            let start = gen.start.as_deref().unwrap_or("");
+
+            write(
+                &js_path,
+                format!(
+                    "\
+import source wasmModule from \"./{wasm_name}.wasm\";
+
+{start}{}",
+                    reset_indentation(&gen.js)
+                ),
+            )?;
+        } else if gen.mode.esm_integration() {
+            let js_name = format!("{}_bg.{extension}", self.stem);
 
             let start = gen.start.as_deref().unwrap_or("");
 
@@ -762,8 +791,7 @@ fn gc_module_and_adapters(module: &mut Module) {
         // good to go. If something is deleted though then we may have free'd up
         // some functions in the main module to get deleted, so go again to gc
         // things.
-        let aux = module.customs.get_typed::<wit::WasmBindgenAux>().unwrap();
-        let any_removed = section.gc(aux);
+        let any_removed = section.gc();
         module.customs.add(*section);
         if !any_removed {
             break;

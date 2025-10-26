@@ -14,14 +14,6 @@
 //! This feature currently enables the `std` feature, meaning that it is not
 //! compatible with `no_std` environments.
 //!
-//! ### `msrv` (default)
-//!
-//! Enables Rust language features that require a higher MSRV. Enabling this
-//! feature on older compilers will NOT result in a compilation error, the newer
-//! language features will simply not be used.
-//!
-//! When compiling with Rust v1.78 or later, this feature enables better error messages for invalid methods on structs and enums.
-//!
 //! ### `std` (default)
 //!
 //! Enabling this feature will make the crate depend on the Rust standard library.
@@ -65,13 +57,12 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::convert::TryFrom;
 use core::marker::PhantomData;
-use core::mem;
 use core::ops::{
     Add, BitAnd, BitOr, BitXor, Deref, DerefMut, Div, Mul, Neg, Not, Rem, Shl, Shr, Sub,
 };
 use core::ptr::NonNull;
 
-use crate::convert::{FromWasmAbi, TryFromJsValue, WasmRet, WasmSlice};
+use crate::convert::{TryFromJsValue, VectorIntoWasmAbi};
 
 const _: () = {
     /// Dummy empty function provided in order to detect linker-injected functions like `__wasm_call_ctors` and others that should be skipped by the wasm-bindgen interpreter.
@@ -135,11 +126,15 @@ pub use wasm_bindgen_macro::link_to;
 pub mod closure;
 pub mod convert;
 pub mod describe;
-mod externref;
 mod link;
 
+#[cfg(wbg_reference_types)]
+mod externref;
+#[cfg(wbg_reference_types)]
+use externref::__wbindgen_externref_heap_live_count;
+
 mod cast;
-pub use crate::cast::{JsCast, JsObject};
+pub use crate::cast::JsCast;
 
 mod cache;
 pub use cache::intern::{intern, unintern};
@@ -147,6 +142,7 @@ pub use cache::intern::{intern, unintern};
 #[doc(hidden)]
 #[path = "rt/mod.rs"]
 pub mod __rt;
+use __rt::wbg_cast;
 
 /// Representation of an object owned by JS.
 ///
@@ -159,25 +155,18 @@ pub struct JsValue {
     _marker: PhantomData<*mut u8>, // not at all threadsafe
 }
 
-const JSIDX_OFFSET: u32 = 128; // keep in sync with js/mod.rs
-const JSIDX_UNDEFINED: u32 = JSIDX_OFFSET;
-const JSIDX_NULL: u32 = JSIDX_OFFSET + 1;
-const JSIDX_TRUE: u32 = JSIDX_OFFSET + 2;
-const JSIDX_FALSE: u32 = JSIDX_OFFSET + 3;
-const JSIDX_RESERVED: u32 = JSIDX_OFFSET + 4;
-
 impl JsValue {
     /// The `null` JS value constant.
-    pub const NULL: JsValue = JsValue::_new(JSIDX_NULL);
+    pub const NULL: JsValue = JsValue::_new(__rt::JSIDX_NULL);
 
     /// The `undefined` JS value constant.
-    pub const UNDEFINED: JsValue = JsValue::_new(JSIDX_UNDEFINED);
+    pub const UNDEFINED: JsValue = JsValue::_new(__rt::JSIDX_UNDEFINED);
 
     /// The `true` JS value constant.
-    pub const TRUE: JsValue = JsValue::_new(JSIDX_TRUE);
+    pub const TRUE: JsValue = JsValue::_new(__rt::JSIDX_TRUE);
 
     /// The `false` JS value constant.
-    pub const FALSE: JsValue = JsValue::_new(JSIDX_FALSE);
+    pub const FALSE: JsValue = JsValue::_new(__rt::JSIDX_FALSE);
 
     #[inline]
     const fn _new(idx: u32) -> JsValue {
@@ -194,7 +183,7 @@ impl JsValue {
     #[allow(clippy::should_implement_trait)] // cannot fix without breaking change
     #[inline]
     pub fn from_str(s: &str) -> JsValue {
-        wbg_cast!(s, &str, JsValue)
+        wbg_cast(s)
     }
 
     /// Creates a new JS value which is a number.
@@ -203,7 +192,7 @@ impl JsValue {
     /// allocated number) and returns a handle to the JS version of it.
     #[inline]
     pub fn from_f64(n: f64) -> JsValue {
-        wbg_cast!(n, f64, JsValue)
+        wbg_cast(n)
     }
 
     /// Creates a new JS value which is a bigint from a string representing a number.
@@ -322,13 +311,13 @@ impl JsValue {
     /// `None`.
     #[inline]
     pub fn as_f64(&self) -> Option<f64> {
-        unsafe { __wbindgen_number_get(self.idx).join() }
+        __wbindgen_number_get(self)
     }
 
     /// Tests whether this JS value is a JS string.
     #[inline]
     pub fn is_string(&self) -> bool {
-        unsafe { __wbindgen_is_string(self.idx) == 1 }
+        __wbindgen_is_string(self)
     }
 
     /// If this JS value is a string value, this function copies the JS string
@@ -353,7 +342,7 @@ impl JsValue {
     /// [caveats]: https://wasm-bindgen.github.io/wasm-bindgen/reference/types/str.html
     #[inline]
     pub fn as_string(&self) -> Option<String> {
-        unsafe { FromWasmAbi::from_abi(__wbindgen_string_get(self.idx)) }
+        __wbindgen_string_get(self)
     }
 
     /// Returns the `bool` value of this JS value if it's an instance of a
@@ -363,37 +352,36 @@ impl JsValue {
     /// `None`.
     #[inline]
     pub fn as_bool(&self) -> Option<bool> {
-        unsafe {
-            match __wbindgen_boolean_get(self.idx) {
-                0 => Some(false),
-                1 => Some(true),
-                _ => None,
-            }
-        }
+        __wbindgen_boolean_get(self)
     }
 
     /// Tests whether this JS value is `null`
     #[inline]
     pub fn is_null(&self) -> bool {
-        unsafe { __wbindgen_is_null(self.idx) == 1 }
+        __wbindgen_is_null(self)
     }
 
     /// Tests whether this JS value is `undefined`
     #[inline]
     pub fn is_undefined(&self) -> bool {
-        unsafe { __wbindgen_is_undefined(self.idx) == 1 }
+        __wbindgen_is_undefined(self)
+    }
+    /// Tests whether this JS value is `null` or `undefined`
+    #[inline]
+    pub fn is_null_or_undefined(&self) -> bool {
+        unsafe { __wbindgen_object_is_null_or_undefined(self.idx) }
     }
 
     /// Tests whether the type of this JS value is `symbol`
     #[inline]
     pub fn is_symbol(&self) -> bool {
-        unsafe { __wbindgen_is_symbol(self.idx) == 1 }
+        __wbindgen_is_symbol(self)
     }
 
     /// Tests whether `typeof self == "object" && self !== null`.
     #[inline]
     pub fn is_object(&self) -> bool {
-        unsafe { __wbindgen_is_object(self.idx) == 1 }
+        __wbindgen_is_object(self)
     }
 
     /// Tests whether this JS value is an instance of Array.
@@ -405,13 +393,13 @@ impl JsValue {
     /// Tests whether the type of this JS value is `function`.
     #[inline]
     pub fn is_function(&self) -> bool {
-        unsafe { __wbindgen_is_function(self.idx) == 1 }
+        __wbindgen_is_function(self)
     }
 
     /// Tests whether the type of this JS value is `bigint`.
     #[inline]
     pub fn is_bigint(&self) -> bool {
-        unsafe { __wbindgen_is_bigint(self.idx) == 1 }
+        __wbindgen_is_bigint(self)
     }
 
     /// Applies the unary `typeof` JS operator on a `JsValue`.
@@ -419,7 +407,7 @@ impl JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/typeof)
     #[inline]
     pub fn js_typeof(&self) -> JsValue {
-        unsafe { JsValue::_new(__wbindgen_typeof(self.idx)) }
+        __wbindgen_typeof(self)
     }
 
     /// Applies the binary `in` JS operator on the two `JsValue`s.
@@ -427,7 +415,7 @@ impl JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/in)
     #[inline]
     pub fn js_in(&self, obj: &JsValue) -> bool {
-        unsafe { __wbindgen_in(self.idx, obj.idx) == 1 }
+        __wbindgen_in(self, obj)
     }
 
     /// Tests whether the value is ["truthy"].
@@ -443,17 +431,12 @@ impl JsValue {
     /// ["falsy"]: https://developer.mozilla.org/en-US/docs/Glossary/Falsy
     #[inline]
     pub fn is_falsy(&self) -> bool {
-        unsafe { __wbindgen_is_falsy(self.idx) == 1 }
+        __wbindgen_is_falsy(self)
     }
 
     /// Get a string representation of the JavaScript object for debugging.
     fn as_debug_string(&self) -> String {
-        unsafe {
-            let mut ret = [0; 2];
-            __wbindgen_debug_string(&mut ret, self.idx);
-            let data = Vec::from_raw_parts(ret[0] as *mut u8, ret[1], ret[1]);
-            String::from_utf8_unchecked(data)
-        }
+        __wbindgen_debug_string(self)
     }
 
     /// Compare two `JsValue`s for equality, using the `==` operator in JS.
@@ -461,7 +444,7 @@ impl JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Equality)
     #[inline]
     pub fn loose_eq(&self, other: &Self) -> bool {
-        unsafe { __wbindgen_jsval_loose_eq(self.idx, other.idx) != 0 }
+        __wbindgen_jsval_loose_eq(self, other)
     }
 
     /// Applies the unary `~` JS operator on a `JsValue`.
@@ -469,7 +452,7 @@ impl JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Bitwise_NOT)
     #[inline]
     pub fn bit_not(&self) -> JsValue {
-        unsafe { JsValue::_new(__wbindgen_bit_not(self.idx)) }
+        __wbindgen_bit_not(self)
     }
 
     /// Applies the binary `>>>` JS operator on the two `JsValue`s.
@@ -477,7 +460,7 @@ impl JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Unsigned_right_shift)
     #[inline]
     pub fn unsigned_shr(&self, rhs: &Self) -> u32 {
-        unsafe { __wbindgen_unsigned_shr(self.idx, rhs.idx) }
+        __wbindgen_unsigned_shr(self, rhs)
     }
 
     /// Applies the binary `/` JS operator on two `JsValue`s, catching and returning any `RangeError` thrown.
@@ -485,7 +468,7 @@ impl JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Division)
     #[inline]
     pub fn checked_div(&self, rhs: &Self) -> Self {
-        unsafe { JsValue::_new(__wbindgen_checked_div(self.idx, rhs.idx)) }
+        __wbindgen_checked_div(self, rhs)
     }
 
     /// Applies the binary `**` JS operator on the two `JsValue`s.
@@ -493,7 +476,7 @@ impl JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Exponentiation)
     #[inline]
     pub fn pow(&self, rhs: &Self) -> Self {
-        unsafe { JsValue::_new(__wbindgen_pow(self.idx, rhs.idx)) }
+        __wbindgen_pow(self, rhs)
     }
 
     /// Applies the binary `<` JS operator on the two `JsValue`s.
@@ -501,7 +484,7 @@ impl JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Less_than)
     #[inline]
     pub fn lt(&self, other: &Self) -> bool {
-        unsafe { __wbindgen_lt(self.idx, other.idx) == 1 }
+        __wbindgen_lt(self, other)
     }
 
     /// Applies the binary `<=` JS operator on the two `JsValue`s.
@@ -509,7 +492,7 @@ impl JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Less_than_or_equal)
     #[inline]
     pub fn le(&self, other: &Self) -> bool {
-        unsafe { __wbindgen_le(self.idx, other.idx) == 1 }
+        __wbindgen_le(self, other)
     }
 
     /// Applies the binary `>=` JS operator on the two `JsValue`s.
@@ -517,7 +500,7 @@ impl JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Greater_than_or_equal)
     #[inline]
     pub fn ge(&self, other: &Self) -> bool {
-        unsafe { __wbindgen_ge(self.idx, other.idx) == 1 }
+        __wbindgen_ge(self, other)
     }
 
     /// Applies the binary `>` JS operator on the two `JsValue`s.
@@ -525,7 +508,7 @@ impl JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Greater_than)
     #[inline]
     pub fn gt(&self, other: &Self) -> bool {
-        unsafe { __wbindgen_gt(self.idx, other.idx) == 1 }
+        __wbindgen_gt(self, other)
     }
 
     /// Applies the unary `+` JS operator on a `JsValue`. Can throw.
@@ -533,7 +516,9 @@ impl JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Unary_plus)
     #[inline]
     pub fn unchecked_into_f64(&self) -> f64 {
-        wbg_cast!(self, &JsValue, f64)
+        // Can't use `wbg_cast` here because it expects that the value already has a correct type
+        // and will fail with an assertion error in debug mode.
+        __wbindgen_as_number(self)
     }
 }
 
@@ -543,7 +528,7 @@ impl PartialEq for JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Strict_equality)
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        unsafe { __wbindgen_jsval_eq(self.idx, other.idx) != 0 }
+        __wbindgen_jsval_eq(self, other)
     }
 }
 
@@ -661,7 +646,7 @@ impl TryFrom<&JsValue> for f64 {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Unary_plus)
     #[inline]
     fn try_from(val: &JsValue) -> Result<Self, Self::Error> {
-        let jsval = unsafe { JsValue::_new(__wbindgen_try_into_number(val.idx)) };
+        let jsval = __wbindgen_try_into_number(val);
         match jsval.as_f64() {
             Some(num) => Ok(num),
             None => Err(jsval),
@@ -677,7 +662,7 @@ impl Neg for &JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Unary_negation)
     #[inline]
     fn neg(self) -> Self::Output {
-        unsafe { JsValue::_new(__wbindgen_neg(self.idx)) }
+        __wbindgen_neg(self)
     }
 }
 
@@ -691,7 +676,7 @@ impl BitAnd for &JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Bitwise_AND)
     #[inline]
     fn bitand(self, rhs: Self) -> Self::Output {
-        unsafe { JsValue::_new(__wbindgen_bit_and(self.idx, rhs.idx)) }
+        __wbindgen_bit_and(self, rhs)
     }
 }
 
@@ -705,7 +690,7 @@ impl BitOr for &JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Bitwise_OR)
     #[inline]
     fn bitor(self, rhs: Self) -> Self::Output {
-        unsafe { JsValue::_new(__wbindgen_bit_or(self.idx, rhs.idx)) }
+        __wbindgen_bit_or(self, rhs)
     }
 }
 
@@ -719,7 +704,7 @@ impl BitXor for &JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Bitwise_XOR)
     #[inline]
     fn bitxor(self, rhs: Self) -> Self::Output {
-        unsafe { JsValue::_new(__wbindgen_bit_xor(self.idx, rhs.idx)) }
+        __wbindgen_bit_xor(self, rhs)
     }
 }
 
@@ -733,7 +718,7 @@ impl Shl for &JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Left_shift)
     #[inline]
     fn shl(self, rhs: Self) -> Self::Output {
-        unsafe { JsValue::_new(__wbindgen_shl(self.idx, rhs.idx)) }
+        __wbindgen_shl(self, rhs)
     }
 }
 
@@ -747,7 +732,7 @@ impl Shr for &JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Right_shift)
     #[inline]
     fn shr(self, rhs: Self) -> Self::Output {
-        unsafe { JsValue::_new(__wbindgen_shr(self.idx, rhs.idx)) }
+        __wbindgen_shr(self, rhs)
     }
 }
 
@@ -761,7 +746,7 @@ impl Add for &JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Addition)
     #[inline]
     fn add(self, rhs: Self) -> Self::Output {
-        unsafe { JsValue::_new(__wbindgen_add(self.idx, rhs.idx)) }
+        __wbindgen_add(self, rhs)
     }
 }
 
@@ -775,7 +760,7 @@ impl Sub for &JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Subtraction)
     #[inline]
     fn sub(self, rhs: Self) -> Self::Output {
-        unsafe { JsValue::_new(__wbindgen_sub(self.idx, rhs.idx)) }
+        __wbindgen_sub(self, rhs)
     }
 }
 
@@ -789,7 +774,7 @@ impl Div for &JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Division)
     #[inline]
     fn div(self, rhs: Self) -> Self::Output {
-        unsafe { JsValue::_new(__wbindgen_div(self.idx, rhs.idx)) }
+        __wbindgen_div(self, rhs)
     }
 }
 
@@ -803,7 +788,7 @@ impl Mul for &JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Multiplication)
     #[inline]
     fn mul(self, rhs: Self) -> Self::Output {
-        unsafe { JsValue::_new(__wbindgen_mul(self.idx, rhs.idx)) }
+        __wbindgen_mul(self, rhs)
     }
 }
 
@@ -817,7 +802,7 @@ impl Rem for &JsValue {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Remainder)
     #[inline]
     fn rem(self, rhs: Self) -> Self::Output {
-        unsafe { JsValue::_new(__wbindgen_rem(self.idx, rhs.idx)) }
+        __wbindgen_rem(self, rhs)
     }
 }
 
@@ -877,13 +862,8 @@ impl TryFrom<JsValue> for String {
 }
 
 impl TryFromJsValue for String {
-    type Error = JsValue;
-
-    fn try_from_js_value(value: JsValue) -> Result<Self, Self::Error> {
-        match value.as_string() {
-            Some(s) => Ok(s),
-            None => Err(value),
-        }
+    fn try_from_js_value_ref(value: &JsValue) -> Option<Self> {
+        value.as_string()
     }
 }
 
@@ -891,6 +871,23 @@ impl From<bool> for JsValue {
     #[inline]
     fn from(s: bool) -> JsValue {
         JsValue::from_bool(s)
+    }
+}
+
+impl TryFromJsValue for bool {
+    fn try_from_js_value_ref(value: &JsValue) -> Option<Self> {
+        value.as_bool()
+    }
+}
+
+impl TryFromJsValue for char {
+    fn try_from_js_value_ref(value: &JsValue) -> Option<Self> {
+        let s = value.as_string()?;
+        if s.len() == 1 {
+            Some(s.chars().nth(0).unwrap())
+        } else {
+            None
+        }
     }
 }
 
@@ -917,8 +914,8 @@ where
     }
 }
 
+// everything is a `JsValue`!
 impl JsCast for JsValue {
-    // everything is a `JsValue`!
     #[inline]
     fn instanceof(_val: &JsValue) -> bool {
         true
@@ -940,7 +937,19 @@ impl AsRef<JsValue> for JsValue {
     }
 }
 
-macro_rules! numbers {
+// Loosely based on toInt32 in ecma-272 for abi semantics
+// with restriction that it only applies for numbers
+fn to_uint_32(v: &JsValue) -> Option<u32> {
+    v.as_f64().map(|n| {
+        if n.is_infinite() {
+            0
+        } else {
+            (n as i64) as u32
+        }
+    })
+}
+
+macro_rules! integers {
     ($($n:ident)*) => ($(
         impl PartialEq<$n> for JsValue {
             #[inline]
@@ -955,12 +964,47 @@ macro_rules! numbers {
                 JsValue::from_f64(n.into())
             }
         }
+
+        // Follows semantics of https://www.w3.org/TR/wasm-js-api-2/#towebassemblyvalue
+        impl TryFromJsValue for $n {
+            #[inline]
+            fn try_from_js_value_ref(val: &JsValue) -> Option<$n> {
+                to_uint_32(val).map(|n| n as $n)
+            }
+        }
     )*)
 }
 
-numbers! { i8 u8 i16 u16 i32 u32 f32 f64 }
+integers! { i8 u8 i16 u16 i32 u32 }
 
-macro_rules! big_numbers {
+macro_rules! floats {
+    ($($n:ident)*) => ($(
+        impl PartialEq<$n> for JsValue {
+            #[inline]
+            fn eq(&self, other: &$n) -> bool {
+                self.as_f64() == Some(f64::from(*other))
+            }
+        }
+
+        impl From<$n> for JsValue {
+            #[inline]
+            fn from(n: $n) -> JsValue {
+                JsValue::from_f64(n.into())
+            }
+        }
+
+        impl TryFromJsValue for $n {
+            #[inline]
+            fn try_from_js_value_ref(val: &JsValue) -> Option<$n> {
+                val.as_f64().map(|n| n as $n)
+            }
+        }
+    )*)
+}
+
+floats! { f32 f64 }
+
+macro_rules! big_integers {
     ($($n:ident)*) => ($(
         impl PartialEq<$n> for JsValue {
             #[inline]
@@ -972,69 +1016,104 @@ macro_rules! big_numbers {
         impl From<$n> for JsValue {
             #[inline]
             fn from(arg: $n) -> JsValue {
-                wbg_cast!(arg, $n, JsValue)
+                wbg_cast(arg)
+            }
+        }
+
+        impl TryFrom<JsValue> for $n {
+            type Error = JsValue;
+
+            #[inline]
+            fn try_from(v: JsValue) -> Result<Self, JsValue> {
+                Self::try_from_js_value(v)
+            }
+        }
+
+        impl TryFromJsValue for $n {
+            #[inline]
+            fn try_from_js_value_ref(val: &JsValue) -> Option<$n> {
+                let as_i64 = __wbindgen_bigint_get_as_i64(&val)?;
+                // Reinterpret bits; ABI-wise this is safe to do and allows us to avoid
+                // having separate intrinsics per signed/unsigned types.
+                let as_self = as_i64 as $n;
+                // Double-check that we didn't truncate the bigint to 64 bits.
+                if val == &as_self {
+                    Some(as_self)
+                } else {
+                    None
+                }
             }
         }
     )*)
 }
 
-fn bigint_get_as_i64(v: &JsValue) -> Option<i64> {
-    unsafe { __wbindgen_bigint_get_as_i64(v.idx).join() }
-}
+big_integers! { i64 u64 }
 
-macro_rules! try_from_for_num64 {
-    ($ty:ty) => {
-        impl TryFrom<JsValue> for $ty {
-            type Error = JsValue;
-
+macro_rules! num128 {
+    ($ty:ty, $hi_ty:ty) => {
+        impl PartialEq<$ty> for JsValue {
             #[inline]
-            fn try_from(v: JsValue) -> Result<Self, JsValue> {
-                bigint_get_as_i64(&v)
-                    // Reinterpret bits; ABI-wise this is safe to do and allows us to avoid
-                    // having separate intrinsics per signed/unsigned types.
-                    .map(|as_i64| as_i64 as Self)
-                    // Double-check that we didn't truncate the bigint to 64 bits.
-                    .filter(|as_self| v == *as_self)
-                    // Not a bigint or not in range.
-                    .ok_or(v)
+            fn eq(&self, other: &$ty) -> bool {
+                self == &JsValue::from(*other)
             }
         }
-    };
-}
 
-try_from_for_num64!(i64);
-try_from_for_num64!(u64);
+        impl From<$ty> for JsValue {
+            #[inline]
+            fn from(arg: $ty) -> JsValue {
+                wbg_cast(arg)
+            }
+        }
 
-macro_rules! try_from_for_num128 {
-    ($ty:ty, $hi_ty:ty) => {
         impl TryFrom<JsValue> for $ty {
             type Error = JsValue;
 
             #[inline]
             fn try_from(v: JsValue) -> Result<Self, JsValue> {
+                Self::try_from_js_value(v)
+            }
+        }
+
+        impl TryFromJsValue for $ty {
+            // This is a non-standard Wasm bindgen conversion, supported equally
+            fn try_from_js_value_ref(v: &JsValue) -> Option<$ty> {
                 // Truncate the bigint to 64 bits, this will give us the lower part.
-                let lo = match bigint_get_as_i64(&v) {
-                    // The lower part must be interpreted as unsigned in both i128 and u128.
-                    Some(lo) => lo as u64,
-                    // Not a bigint.
-                    None => return Err(v),
-                };
+                // The lower part must be interpreted as unsigned in both i128 and u128.
+                let lo = __wbindgen_bigint_get_as_i64(&v)? as u64;
                 // Now we know it's a bigint, so we can safely use `>> 64n` without
                 // worrying about a JS exception on type mismatch.
                 let hi = v >> JsValue::from(64_u64);
                 // The high part is the one we want checked against a 64-bit range.
                 // If it fits, then our original number is in the 128-bit range.
-                let hi = <$hi_ty>::try_from(hi)?;
-                Ok(Self::from(hi) << 64 | Self::from(lo))
+                <$hi_ty>::try_from_js_value_ref(&hi).map(|hi| Self::from(hi) << 64 | Self::from(lo))
             }
         }
     };
 }
 
-try_from_for_num128!(i128, i64);
-try_from_for_num128!(u128, u64);
+num128!(i128, i64);
 
-big_numbers! { i64 u64 i128 u128 }
+num128!(u128, u64);
+
+impl TryFromJsValue for () {
+    fn try_from_js_value_ref(value: &JsValue) -> Option<Self> {
+        if value.is_undefined() {
+            Some(())
+        } else {
+            None
+        }
+    }
+}
+
+impl<T: TryFromJsValue> TryFromJsValue for Option<T> {
+    fn try_from_js_value_ref(value: &JsValue) -> Option<Self> {
+        if value.is_undefined() {
+            Some(None)
+        } else {
+            T::try_from_js_value_ref(value).map(Some)
+        }
+    }
+}
 
 // `usize` and `isize` have to be treated a bit specially, because we know that
 // they're 32-bit but the compiler conservatively assumes they might be bigger.
@@ -1067,6 +1146,22 @@ impl From<isize> for JsValue {
     }
 }
 
+// Follows semantics of https://www.w3.org/TR/wasm-js-api-2/#towebassemblyvalue
+impl TryFromJsValue for isize {
+    #[inline]
+    fn try_from_js_value_ref(val: &JsValue) -> Option<isize> {
+        val.as_f64().map(|n| n as isize)
+    }
+}
+
+// Follows semantics of https://www.w3.org/TR/wasm-js-api-2/#towebassemblyvalue
+impl TryFromJsValue for usize {
+    #[inline]
+    fn try_from_js_value_ref(val: &JsValue) -> Option<usize> {
+        val.as_f64().map(|n| n as usize)
+    }
+}
+
 // Intrinsics that are simply JS function bindings and can be self-hosted via the macro.
 #[wasm_bindgen_macro::wasm_bindgen(wasm_bindgen = crate)]
 extern "C" {
@@ -1087,80 +1182,93 @@ extern "C" {
 
     #[wasm_bindgen(js_namespace = JSON, js_name = stringify)]
     fn __wbindgen_json_serialize(v: &JsValue) -> Option<String>;
+
+    #[wasm_bindgen(js_name = Number)]
+    fn __wbindgen_as_number(v: &JsValue) -> f64;
 }
 
+// Intrinsics which are handled by cli-support but for which we can use
+// standard wasm-bindgen ABI conversions.
+#[wasm_bindgen_macro::wasm_bindgen(wasm_bindgen = crate, raw_module = "__wbindgen_placeholder__")]
+extern "C" {
+    #[cfg(not(wbg_reference_types))]
+    fn __wbindgen_externref_heap_live_count() -> u32;
+
+    fn __wbindgen_is_null(js: &JsValue) -> bool;
+    fn __wbindgen_is_undefined(js: &JsValue) -> bool;
+    fn __wbindgen_is_symbol(js: &JsValue) -> bool;
+    fn __wbindgen_is_object(js: &JsValue) -> bool;
+    fn __wbindgen_is_function(js: &JsValue) -> bool;
+    fn __wbindgen_is_string(js: &JsValue) -> bool;
+    fn __wbindgen_is_bigint(js: &JsValue) -> bool;
+    fn __wbindgen_typeof(js: &JsValue) -> JsValue;
+
+    fn __wbindgen_in(prop: &JsValue, obj: &JsValue) -> bool;
+
+    fn __wbindgen_is_falsy(js: &JsValue) -> bool;
+    fn __wbindgen_try_into_number(js: &JsValue) -> JsValue;
+    fn __wbindgen_neg(js: &JsValue) -> JsValue;
+    fn __wbindgen_bit_and(a: &JsValue, b: &JsValue) -> JsValue;
+    fn __wbindgen_bit_or(a: &JsValue, b: &JsValue) -> JsValue;
+    fn __wbindgen_bit_xor(a: &JsValue, b: &JsValue) -> JsValue;
+    fn __wbindgen_bit_not(js: &JsValue) -> JsValue;
+    fn __wbindgen_shl(a: &JsValue, b: &JsValue) -> JsValue;
+    fn __wbindgen_shr(a: &JsValue, b: &JsValue) -> JsValue;
+    fn __wbindgen_unsigned_shr(a: &JsValue, b: &JsValue) -> u32;
+    fn __wbindgen_add(a: &JsValue, b: &JsValue) -> JsValue;
+    fn __wbindgen_sub(a: &JsValue, b: &JsValue) -> JsValue;
+    fn __wbindgen_div(a: &JsValue, b: &JsValue) -> JsValue;
+    fn __wbindgen_checked_div(a: &JsValue, b: &JsValue) -> JsValue;
+    fn __wbindgen_mul(a: &JsValue, b: &JsValue) -> JsValue;
+    fn __wbindgen_rem(a: &JsValue, b: &JsValue) -> JsValue;
+    fn __wbindgen_pow(a: &JsValue, b: &JsValue) -> JsValue;
+    fn __wbindgen_lt(a: &JsValue, b: &JsValue) -> bool;
+    fn __wbindgen_le(a: &JsValue, b: &JsValue) -> bool;
+    fn __wbindgen_ge(a: &JsValue, b: &JsValue) -> bool;
+    fn __wbindgen_gt(a: &JsValue, b: &JsValue) -> bool;
+
+    fn __wbindgen_number_get(js: &JsValue) -> Option<f64>;
+    fn __wbindgen_boolean_get(js: &JsValue) -> Option<bool>;
+    fn __wbindgen_string_get(js: &JsValue) -> Option<String>;
+    fn __wbindgen_bigint_get_as_i64(js: &JsValue) -> Option<i64>;
+
+    fn __wbindgen_debug_string(js: &JsValue) -> String;
+
+    fn __wbindgen_throw(msg: &str) /* -> ! */;
+    fn __wbindgen_rethrow(js: JsValue) /* -> ! */;
+
+    fn __wbindgen_jsval_eq(a: &JsValue, b: &JsValue) -> bool;
+    fn __wbindgen_jsval_loose_eq(a: &JsValue, b: &JsValue) -> bool;
+
+    fn __wbindgen_copy_to_typed_array(data: &[u8], js: &JsValue);
+
+    fn __wbindgen_init_externref_table();
+
+    fn __wbindgen_exports() -> JsValue;
+    fn __wbindgen_memory() -> JsValue;
+    fn __wbindgen_module() -> JsValue;
+    fn __wbindgen_function_table() -> JsValue;
+}
+
+// Intrinsics that have to use raw imports because they're matched by other
+// parts of the transform codebase instead of just generating JS.
 externs! {
     #[link(wasm_import_module = "__wbindgen_placeholder__")]
     extern "C" {
+        fn __wbindgen_object_clone_ref(idx: u32) -> u32;
         fn __wbindgen_object_drop_ref(idx: u32) -> ();
-
-
-        fn __wbindgen_externref_heap_live_count() -> u32;
-
-        fn __wbindgen_is_null(idx: u32) -> u32;
-        fn __wbindgen_is_undefined(idx: u32) -> u32;
-        fn __wbindgen_is_symbol(idx: u32) -> u32;
-        fn __wbindgen_is_object(idx: u32) -> u32;
-        fn __wbindgen_is_function(idx: u32) -> u32;
-        fn __wbindgen_is_string(idx: u32) -> u32;
-        fn __wbindgen_is_bigint(idx: u32) -> u32;
-        fn __wbindgen_typeof(idx: u32) -> u32;
-
-        fn __wbindgen_in(prop: u32, obj: u32) -> u32;
-
-        fn __wbindgen_is_falsy(idx: u32) -> u32;
-        fn __wbindgen_try_into_number(idx: u32) -> u32;
-        fn __wbindgen_neg(idx: u32) -> u32;
-        fn __wbindgen_bit_and(a: u32, b: u32) -> u32;
-        fn __wbindgen_bit_or(a: u32, b: u32) -> u32;
-        fn __wbindgen_bit_xor(a: u32, b: u32) -> u32;
-        fn __wbindgen_bit_not(idx: u32) -> u32;
-        fn __wbindgen_shl(a: u32, b: u32) -> u32;
-        fn __wbindgen_shr(a: u32, b: u32) -> u32;
-        fn __wbindgen_unsigned_shr(a: u32, b: u32) -> u32;
-        fn __wbindgen_add(a: u32, b: u32) -> u32;
-        fn __wbindgen_sub(a: u32, b: u32) -> u32;
-        fn __wbindgen_div(a: u32, b: u32) -> u32;
-        fn __wbindgen_checked_div(a: u32, b: u32) -> u32;
-        fn __wbindgen_mul(a: u32, b: u32) -> u32;
-        fn __wbindgen_rem(a: u32, b: u32) -> u32;
-        fn __wbindgen_pow(a: u32, b: u32) -> u32;
-        fn __wbindgen_lt(a: u32, b: u32) -> u32;
-        fn __wbindgen_le(a: u32, b: u32) -> u32;
-        fn __wbindgen_ge(a: u32, b: u32) -> u32;
-        fn __wbindgen_gt(a: u32, b: u32) -> u32;
-
-        fn __wbindgen_number_get(idx: u32) -> WasmRet<Option<f64>>;
-        fn __wbindgen_boolean_get(idx: u32) -> u32;
-        fn __wbindgen_string_get(idx: u32) -> WasmSlice;
-        fn __wbindgen_bigint_get_as_i64(idx: u32) -> WasmRet<Option<i64>>;
-
-        fn __wbindgen_debug_string(ret: *mut [usize; 2], idx: u32) -> ();
-
-        fn __wbindgen_throw(a: *const u8, b: usize) -> !;
-        fn __wbindgen_rethrow(a: u32) -> !;
-
-        fn __wbindgen_cb_drop(idx: u32) -> u32;
+        fn __wbindgen_object_is_null_or_undefined(idx: u32) -> bool;
+        fn __wbindgen_object_is_undefined(idx: u32) -> bool;
 
         fn __wbindgen_describe(v: u32) -> ();
-        fn __wbindgen_describe_closure(a: u32, b: u32, c: u32) -> u32;
-
-        fn __wbindgen_jsval_eq(a: u32, b: u32) -> u32;
-        fn __wbindgen_jsval_loose_eq(a: u32, b: u32) -> u32;
-
-        fn __wbindgen_copy_to_typed_array(ptr: *const u8, len: usize, idx: u32) -> ();
-
-        fn __wbindgen_exports() -> u32;
-        fn __wbindgen_memory() -> u32;
-        fn __wbindgen_module() -> u32;
-        fn __wbindgen_function_table() -> u32;
+        fn __wbindgen_describe_cast(func: *const (), prims: *const ()) -> *const ();
     }
 }
 
 impl Clone for JsValue {
     #[inline]
     fn clone(&self) -> JsValue {
-        wbg_cast!(self, &JsValue, JsValue)
+        JsValue::_new(unsafe { __wbindgen_object_clone_ref(self.idx) })
     }
 }
 
@@ -1175,12 +1283,16 @@ impl Drop for JsValue {
     fn drop(&mut self) {
         unsafe {
             // We definitely should never drop anything in the stack area
-            debug_assert!(self.idx >= JSIDX_OFFSET, "free of stack slot {}", self.idx);
+            debug_assert!(
+                self.idx >= __rt::JSIDX_OFFSET,
+                "free of stack slot {}",
+                self.idx
+            );
 
             // Otherwise if we're not dropping one of our reserved values,
             // actually call the intrinsic. See #1054 for eventually removing
             // this branch.
-            if self.idx >= JSIDX_RESERVED {
+            if self.idx >= __rt::JSIDX_RESERVED {
                 __wbindgen_object_drop_ref(self.idx);
             }
         }
@@ -1223,7 +1335,7 @@ pub struct JsStatic<T: 'static> {
 #[cfg(feature = "std")]
 #[allow(deprecated)]
 #[cfg(not(target_feature = "atomics"))]
-impl<T: FromWasmAbi + 'static> Deref for JsStatic<T> {
+impl<T: crate::convert::FromWasmAbi + 'static> Deref for JsStatic<T> {
     type Target = T;
     fn deref(&self) -> &T {
         unsafe { self.__inner.with(|ptr| &*(ptr as *const T)) }
@@ -1290,9 +1402,8 @@ pub fn throw(s: &str) -> ! {
 #[cold]
 #[inline(never)]
 pub fn throw_str(s: &str) -> ! {
-    unsafe {
-        __wbindgen_throw(s.as_ptr(), s.len());
-    }
+    __wbindgen_throw(s);
+    unsafe { core::hint::unreachable_unchecked() }
 }
 
 /// Rethrow a JS exception
@@ -1308,11 +1419,8 @@ pub fn throw_str(s: &str) -> ! {
 #[cold]
 #[inline(never)]
 pub fn throw_val(s: JsValue) -> ! {
-    unsafe {
-        let idx = s.idx;
-        mem::forget(s);
-        __wbindgen_rethrow(idx);
-    }
+    __wbindgen_rethrow(s);
+    unsafe { core::hint::unreachable_unchecked() }
 }
 
 /// Get the count of live `externref`s / `JsValue`s in `wasm-bindgen`'s heap.
@@ -1360,7 +1468,7 @@ pub fn throw_val(s: JsValue) -> ! {
 /// }
 /// ```
 pub fn externref_heap_live_count() -> u32 {
-    unsafe { __wbindgen_externref_heap_live_count() }
+    __wbindgen_externref_heap_live_count()
 }
 
 #[doc(hidden)]
@@ -1564,23 +1672,23 @@ where
 /// This is only available when the final Wasm app is built with
 /// `--target no-modules` or `--target web`.
 pub fn module() -> JsValue {
-    unsafe { JsValue::_new(__wbindgen_module()) }
+    __wbindgen_module()
 }
 
 /// Returns a handle to this Wasm instance's `WebAssembly.Instance.prototype.exports`
 pub fn exports() -> JsValue {
-    unsafe { JsValue::_new(__wbindgen_exports()) }
+    __wbindgen_exports()
 }
 
 /// Returns a handle to this Wasm instance's `WebAssembly.Memory`
 pub fn memory() -> JsValue {
-    unsafe { JsValue::_new(__wbindgen_memory()) }
+    __wbindgen_memory()
 }
 
 /// Returns a handle to this Wasm instance's `WebAssembly.Table` which is the
 /// indirect function table used by Rust
 pub fn function_table() -> JsValue {
-    unsafe { JsValue::_new(__wbindgen_function_table()) }
+    __wbindgen_function_table()
 }
 
 /// A wrapper type around slices and vectors for binding the `Uint8ClampedArray`
@@ -1701,49 +1809,25 @@ impl From<JsError> for JsValue {
     }
 }
 
-macro_rules! typed_arrays {
-    ($($ty:ident)*) => {$(
-        impl From<Box<[$ty]>> for JsValue {
-            fn from(vector: Box<[$ty]>) -> Self {
-                wbg_cast!(vector, Box<[$ty]>, JsValue)
-            }
-        }
-
-        impl From<Clamped<Box<[$ty]>>> for JsValue {
-            fn from(vector: Clamped<Box<[$ty]>>) -> Self {
-                wbg_cast!(vector, Clamped<Box<[$ty]>>, JsValue)
-            }
-        }
-    )*};
-}
-
-typed_arrays!(u8 u16 u32 u64 i8 i16 i32 i64 f32 f64);
-
-impl __rt::VectorIntoJsValue for JsValue {
-    fn vector_into_jsvalue(vector: Box<[JsValue]>) -> JsValue {
-        wbg_cast!(vector, Box<[JsValue]>, JsValue)
+impl<T: VectorIntoWasmAbi> From<Box<[T]>> for JsValue {
+    fn from(vector: Box<[T]>) -> Self {
+        wbg_cast(vector)
     }
 }
 
-impl __rt::VectorIntoJsValue for String {
-    fn vector_into_jsvalue(vector: Box<[String]>) -> JsValue {
-        wbg_cast!(vector, Box<[String]>, JsValue)
+impl<T: VectorIntoWasmAbi> From<Clamped<Box<[T]>>> for JsValue {
+    fn from(vector: Clamped<Box<[T]>>) -> Self {
+        wbg_cast(vector)
     }
 }
 
-impl<T> From<Vec<T>> for JsValue
-where
-    JsValue: From<Box<[T]>>,
-{
+impl<T: VectorIntoWasmAbi> From<Vec<T>> for JsValue {
     fn from(vector: Vec<T>) -> Self {
         JsValue::from(vector.into_boxed_slice())
     }
 }
 
-impl<T> From<Clamped<Vec<T>>> for JsValue
-where
-    JsValue: From<Clamped<Box<[T]>>>,
-{
+impl<T: VectorIntoWasmAbi> From<Clamped<Vec<T>>> for JsValue {
     fn from(vector: Clamped<Vec<T>>) -> Self {
         JsValue::from(Clamped(vector.0.into_boxed_slice()))
     }

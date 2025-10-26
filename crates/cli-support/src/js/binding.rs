@@ -9,7 +9,7 @@ use crate::wit::InstructionData;
 use crate::wit::{
     Adapter, AdapterId, AdapterKind, AdapterType, AuxFunctionArgumentData, Instruction,
 };
-use anyhow::{anyhow, bail, Error};
+use anyhow::{bail, Error};
 use std::collections::HashSet;
 use std::fmt::Write;
 use walrus::{Module, ValType};
@@ -86,7 +86,7 @@ pub struct JsFunction {
 
 /// A references to an (likely) exported symbol used in TS type expression.
 ///
-/// Right now, only string enum require this type of anaylsis.
+/// Right now, only string enum require this type of analysis.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TsReference {
     StringEnum(String),
@@ -150,6 +150,15 @@ impl<'a, 'b> Builder<'a, 'b> {
         let mut js = JsBuilder::new(self.cx, debug_name);
         if let Some(consumes_self) = self.method {
             let _ = params.next();
+            if js.cx.config.generate_reset_state {
+                js.prelude(
+                    "
+                    if (this.__wbg_inst !== undefined && this.__wbg_inst !== __wbg_instance_id) {
+                        throw new Error('Invalid stale object from previous Wasm instance');
+                    }
+                    ",
+                );
+            }
             if js.cx.config.debug {
                 js.prelude(
                     "if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');",
@@ -693,16 +702,26 @@ impl<'a, 'b> JsBuilder<'a, 'b> {
     }
 
     fn assert_not_moved(&mut self, arg: &str) {
-        if !self.cx.config.debug {
-            return;
+        if self.cx.config.generate_reset_state {
+            // Under reset state, we need comprehensive validation
+            self.prelude(&format!(
+                "\
+                if (({arg}).__wbg_inst !== undefined && ({arg}).__wbg_inst !== __wbg_instance_id) {{
+                    throw new Error('Invalid stale object from previous Wasm instance');
+                }}
+                "
+            ));
         }
-        self.prelude(&format!(
-            "\
+        if self.cx.config.debug {
+            // Debug mode only checks for moved values
+            self.prelude(&format!(
+                "\
                 if ({arg}.__wbg_ptr === 0) {{
                     throw new Error('Attempt to use a moved value');
                 }}
-            ",
-        ));
+                ",
+            ));
+        }
     }
 
     fn string_to_memory(
@@ -777,10 +796,8 @@ fn instruction(
             js.push(arg);
         }
 
-        Instruction::CallCore(_)
-        | Instruction::CallExport(_)
+        Instruction::CallExport(_)
         | Instruction::CallAdapter(_)
-        | Instruction::CallTableElement(_)
         | Instruction::DeferFree { .. } => {
             let invoc = Invocation::from(instr, js.cx.module)?;
             let (mut params, results) = invoc.params_results(js.cx);
@@ -967,19 +984,14 @@ fn instruction(
                 AdapterType::I64 => ("setBigInt64", 8),
                 AdapterType::F32 => ("setFloat32", 4),
                 AdapterType::F64 => ("setFloat64", 8),
-                other => bail!("invalid aggregate return type {:?}", other),
+                other => bail!("invalid aggregate return type {other:?}"),
             };
             // Note that we always assume the return pointer is argument 0,
             // which is currently the case for LLVM.
             let val = js.pop();
             let expr = format!(
-                "{}().{}({} + {} * {}, {}, true);",
-                mem,
-                method,
+                "{mem}().{method}({} + {size} * {offset}, {val}, true);",
                 js.arg(0),
-                size,
-                offset,
-                val,
             );
             js.prelude(&expr);
         }
@@ -991,7 +1003,7 @@ fn instruction(
                 AdapterType::I64 => ("getBigInt64", 2),
                 AdapterType::F32 => ("getFloat32", 1),
                 AdapterType::F64 => ("getFloat64", 2),
-                other => bail!("invalid aggregate return type {:?}", other),
+                other => bail!("invalid aggregate return type {other:?}"),
             };
             let size = quads * 4;
             // Separate the offset and the scaled offset, because otherwise you don't guarantee
@@ -1318,10 +1330,27 @@ fn instruction(
             let val = js.pop();
             match constructor {
                 Some(name) if name == class => {
+                    let (ptr_assignment, register_data) = if js.cx.config.generate_reset_state {
+                        (
+                            format!(
+                                "\
+                                this.__wbg_ptr = {val} >>> 0;
+                                this.__wbg_inst = __wbg_instance_id;
+                                "
+                            ),
+                            format!("{{ ptr: {val} >>> 0, instance: __wbg_instance_id }}"),
+                        )
+                    } else {
+                        (
+                            format!("this.__wbg_ptr = {val} >>> 0;"),
+                            "this.__wbg_ptr".to_string(),
+                        )
+                    };
+
                     js.prelude(&format!(
                         "
-                        this.__wbg_ptr = {val} >>> 0;
-                        {name}Finalization.register(this, this.__wbg_ptr, this);
+                        {ptr_assignment}
+                        {name}Finalization.register(this, {register_data}, this);
                         "
                     ));
                     js.push(String::from("this"));
@@ -1370,47 +1399,66 @@ fn instruction(
             js.push(format!("getObject({val})"));
         }
 
-        Instruction::StackClosure {
+        Instruction::Closure {
             adapter,
             nargs,
             mutable,
+            dtor_if_persistent,
         } => {
-            let i = js.tmp();
             let b = js.pop();
             let a = js.pop();
-            js.prelude(&format!("var state{i} = {{a: {a}, b: {b}}};"));
-            let args = (0..*nargs)
-                .map(|i| format!("arg{i}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let wrapper = js.cx.adapter_name(*adapter);
-            if *mutable {
-                // Mutable closures need protection against being called
-                // recursively, so ensure that we clear out one of the
-                // internal pointers while it's being invoked.
-                js.prelude(&format!(
-                    "var cb{i} = ({args}) => {{
-                        const a = state{i}.a;
-                        state{i}.a = 0;
-                        try {{
-                            return {wrapper}(a, state{i}.b, {args});
-                        }} finally {{
-                            state{i}.a = a;
-                        }}
-                    }};",
-                ));
-            } else {
-                js.prelude(&format!(
-                    "var cb{i} = ({args}) => {wrapper}(state{i}.a, state{i}.b, {args});",
-                ));
-            }
+            let wrapper = js.cx.export_adapter_name(*adapter);
 
-            // Make sure to null out our internal pointers when we return
-            // back to Rust to ensure that any lingering references to the
-            // closure will fail immediately due to null pointers passed in
-            // to Rust.
-            js.finally(&format!("state{i}.a = state{i}.b = 0;"));
-            js.push(format!("cb{i}"));
+            // TODO: further merge the heap and stack closure handling as
+            // they're almost identical (by nature) except for ownership
+            // integration.
+            if let Some(dtor) = dtor_if_persistent {
+                let make_closure = if *mutable {
+                    js.cx.expose_make_mut_closure()?;
+                    "makeMutClosure"
+                } else {
+                    js.cx.expose_make_closure()?;
+                    "makeClosure"
+                };
+
+                let dtor = &js.cx.module.exports.get(*dtor).name;
+
+                js.push(format!("{make_closure}({a}, {b}, wasm.{dtor}, {wrapper})"));
+            } else {
+                let i = js.tmp();
+                js.prelude(&format!("var state{i} = {{a: {a}, b: {b}}};"));
+                let args = (0..*nargs)
+                    .map(|i| format!("arg{i}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if *mutable {
+                    // Mutable closures need protection against being called
+                    // recursively, so ensure that we clear out one of the
+                    // internal pointers while it's being invoked.
+                    js.prelude(&format!(
+                        "var cb{i} = ({args}) => {{
+                            const a = state{i}.a;
+                            state{i}.a = 0;
+                            try {{
+                                return {wrapper}(a, state{i}.b, {args});
+                            }} finally {{
+                                state{i}.a = a;
+                            }}
+                        }};",
+                    ));
+                } else {
+                    js.prelude(&format!(
+                        "var cb{i} = ({args}) => {wrapper}(state{i}.a, state{i}.b, {args});",
+                    ));
+                }
+
+                // Make sure to null out our internal pointers when we return
+                // back to Rust to ensure that any lingering references to the
+                // closure will fail immediately due to null pointers passed in
+                // to Rust.
+                js.finally(&format!("state{i}.a = state{i}.b = 0;"));
+                js.push(format!("cb{i}"));
+            }
         }
 
         Instruction::VectorLoad { kind, mem, free } => {
@@ -1421,10 +1469,7 @@ fn instruction(
             let free = js.cx.export_name_of(*free);
             js.prelude(&format!("var v{i} = {f}({ptr}, {len}).slice();"));
             js.prelude(&format!(
-                "wasm.{}({}, {} * {size}, {size});",
-                free,
-                ptr,
-                len,
+                "wasm.{free}({ptr}, {len} * {size}, {size});",
                 size = kind.size()
             ));
             js.push(format!("v{i}"))
@@ -1440,10 +1485,7 @@ fn instruction(
             js.prelude(&format!("if ({ptr} !== 0) {{"));
             js.prelude(&format!("v{i} = {f}({ptr}, {len}).slice();"));
             js.prelude(&format!(
-                "wasm.{}({}, {} * {size}, {size});",
-                free,
-                ptr,
-                len,
+                "wasm.{free}({ptr}, {len} * {size}, {size});",
                 size = kind.size()
             ));
             js.prelude("}");
@@ -1478,8 +1520,7 @@ fn instruction(
             let val = js.pop();
             let present = js.pop();
             js.push(format!(
-                "{} === 0 ? undefined : {}",
-                present,
+                "{present} === 0 ? undefined : {}",
                 if *signed {
                     val
                 } else {
@@ -1539,11 +1580,6 @@ impl Invocation {
     fn from(instr: &Instruction, module: &Module) -> Result<Invocation, Error> {
         use Instruction::*;
         Ok(match instr {
-            CallCore(f) => Invocation::Core {
-                id: *f,
-                defer: false,
-            },
-
             DeferFree { free, .. } => Invocation::Core {
                 id: *free,
                 defer: true,
@@ -1553,16 +1589,6 @@ impl Invocation {
                 walrus::ExportItem::Function(id) => Invocation::Core { id, defer: false },
                 _ => panic!("can only call exported function"),
             },
-
-            // The function table never changes right now, so we can statically
-            // look up the desired function.
-            CallTableElement(idx) => {
-                let entry = crate::wasm_conventions::get_function_table_entry(module, *idx)?;
-                let id = entry
-                    .func
-                    .ok_or_else(|| anyhow!("function table wasn't filled in a {}", idx))?;
-                Invocation::Core { id, defer: false }
-            }
 
             CallAdapter(id) => Invocation::Adapter(*id),
 
@@ -1595,7 +1621,7 @@ impl Invocation {
         match self {
             Invocation::Core { id, .. } => {
                 let name = cx.export_name_of(*id);
-                Ok(format!("wasm.{}({})", name, args.join(", ")))
+                Ok(format!("wasm.{name}({})", args.join(", ")))
             }
             Invocation::Adapter(id) => {
                 let adapter = &cx.wit.adapters[id];
